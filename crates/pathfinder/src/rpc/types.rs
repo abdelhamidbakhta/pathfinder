@@ -196,11 +196,15 @@ pub mod reply {
         core::{
             CallParam, ClassHash, ContractAddress, EntryPoint, EventData, EventKey, Fee, GasPrice,
             GlobalRoot, SequencerAddress, StarknetBlockHash, StarknetBlockNumber,
-            StarknetBlockTimestamp, StarknetTransactionHash,
+            StarknetBlockTimestamp, StarknetTransactionHash, TransactionNonce,
+            TransactionSignatureElem, TransactionVersion,
         },
         rpc::{
             api::RawBlock,
-            serde::{FeeAsHexStr, GasPriceAsHexStr},
+            serde::{
+                CallParamAsDecimalStr, FeeAsHexStr, GasPriceAsHexStr,
+                TransactionSignatureElemAsDecimalStr, TransactionVersionAsHexStr,
+            },
         },
         sequencer,
     };
@@ -394,11 +398,11 @@ pub mod reply {
                                     let r = TransactionReceipt::with_status(r, block.status.into());
 
                                     TransactionAndReceipt {
-                                        txn_hash: t.txn_hash,
-                                        contract_address: t.contract_address,
-                                        entry_point_selector: t.entry_point_selector,
-                                        calldata: t.calldata,
-                                        max_fee: t.max_fee,
+                                        txn_hash: t.hash(),
+                                        contract_address: None,
+                                        entry_point_selector: None,
+                                        calldata: None,
+                                        max_fee: None,
                                         actual_fee: r.actual_fee,
                                         status: r.status,
                                         status_data: r.status_data,
@@ -590,25 +594,66 @@ pub mod reply {
     }
 
     /// L2 transaction as returned by the RPC API.
-    ///
-    /// `contract_address` field is available for Deploy and Invoke transactions.
-    /// `entry_point_selector` and `calldata` fields are available only
-    /// for Invoke transactions.
+    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+    #[serde(tag = "type")]
+    #[serde(deny_unknown_fields)]
+    pub enum Transaction {
+        #[serde(rename = "DECLARE")]
+        Declare(DeclareTransaction),
+        // FIXME: add Deploy
+        #[serde(rename = "INVOKE_FUNCTION")]
+        Invoke(InvokeTransaction),
+    }
+
+    impl Transaction {
+        pub fn hash(&self) -> StarknetTransactionHash {
+            match self {
+                Transaction::Declare(declare) => declare.txn_hash.clone(),
+                Transaction::Invoke(invoke) => invoke.txn_hash.clone(),
+            }
+        }
+    }
+
     #[serde_as]
-    #[skip_serializing_none]
     #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
     #[serde(deny_unknown_fields)]
-    pub struct Transaction {
+    pub struct DeclareTransaction {
+        // COMMON_TXN_PROPERTIES
         pub txn_hash: StarknetTransactionHash,
+        #[serde_as(as = "FeeAsHexStr")]
+        pub max_fee: Fee,
+        #[serde_as(as = "TransactionVersionAsHexStr")]
+        pub version: TransactionVersion,
+        #[serde_as(as = "Vec<TransactionSignatureElemAsDecimalStr>")]
         #[serde(default)]
-        pub contract_address: Option<ContractAddress>,
+        pub signature: Vec<TransactionSignatureElem>,
+        pub nonce: TransactionNonce,
+
+        // FIXME: this is a deviation from the OpenRPC spec, which would expect us to
+        // include the full contract definition here
+        pub class_hash: ClassHash,
+        pub sender_address: ContractAddress,
+    }
+
+    #[serde_as]
+    #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    pub struct InvokeTransaction {
+        // COMMON_TXN_PROPERTIES
+        pub txn_hash: StarknetTransactionHash,
+        #[serde_as(as = "FeeAsHexStr")]
+        pub max_fee: Fee,
+        #[serde_as(as = "TransactionVersionAsHexStr")]
+        pub version: TransactionVersion,
+        #[serde_as(as = "Vec<TransactionSignatureElemAsDecimalStr>")]
         #[serde(default)]
-        pub entry_point_selector: Option<EntryPoint>,
-        #[serde(default)]
-        pub calldata: Option<Vec<CallParam>>,
-        #[serde_as(as = "Option<FeeAsHexStr>")]
-        #[serde(default)]
-        pub max_fee: Option<Fee>,
+        pub signature: Vec<TransactionSignatureElem>,
+        pub nonce: TransactionNonce,
+
+        pub contract_address: ContractAddress,
+        pub entry_point_selector: EntryPoint,
+        #[serde_as(as = "Vec<CallParamAsDecimalStr>")]
+        pub calldata: Vec<CallParam>,
     }
 
     impl TryFrom<sequencer::reply::Transaction> for Transaction {
@@ -626,22 +671,33 @@ pub mod reply {
     impl From<sequencer::reply::transaction::Transaction> for Transaction {
         fn from(txn: sequencer::reply::transaction::Transaction) -> Self {
             match txn {
-                sequencer::reply::transaction::Transaction::Invoke(txn) => Self {
-                    txn_hash: txn.transaction_hash,
-                    contract_address: Some(txn.contract_address),
-                    entry_point_selector: Some(txn.entry_point_selector),
-                    calldata: Some(txn.calldata),
-                    max_fee: Some(txn.max_fee),
-                },
-                _ => Self {
-                    // TODO this is probably the best we can do until the RPC spec introduces
-                    // 3 variants for all the transaction types
-                    txn_hash: txn.hash(),
-                    contract_address: None,
-                    entry_point_selector: None,
-                    calldata: None,
-                    max_fee: None,
-                },
+                sequencer::reply::transaction::Transaction::Invoke(txn) => {
+                    Self::Invoke(InvokeTransaction {
+                        txn_hash: txn.transaction_hash,
+                        max_fee: txn.max_fee,
+                        // no `version` in invoke transactions
+                        version: TransactionVersion(Default::default()),
+                        signature: txn.signature,
+                        // no `nonce` in invoke transactions
+                        nonce: TransactionNonce(Default::default()),
+                        contract_address: txn.contract_address,
+                        entry_point_selector: txn.entry_point_selector,
+                        calldata: txn.calldata,
+                    })
+                }
+                sequencer::reply::transaction::Transaction::Declare(txn) => {
+                    Self::Declare(DeclareTransaction {
+                        txn_hash: txn.transaction_hash,
+                        max_fee: txn.max_fee,
+                        version: txn.version,
+                        signature: txn.signature,
+                        nonce: txn.nonce,
+                        class_hash: txn.class_hash,
+                        sender_address: txn.sender_address,
+                    })
+                }
+                // TODO: add deploy transaction
+                _ => unimplemented!(),
             }
         }
     }
