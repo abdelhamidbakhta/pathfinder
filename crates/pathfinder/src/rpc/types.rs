@@ -252,10 +252,7 @@ pub mod reply {
     #[serde(deny_unknown_fields)]
     #[serde(untagged)]
     pub enum Transactions {
-        HashesOnly(Vec<StarknetTransactionHash>),
-        // 1. The following two variants can come in any order as long
-        // as they both internally do `#[serde(deny_unknown_fields)]`.
-        // 2. Otherwise the larger variant, `FullWithReceipts` needs
+        // The larger variant, `FullWithReceipts` needs
         // to come __before__ `Full`  as it contains a structure
         // which has the same fields as `Full` plus some additional fields.
         // Which means that `serde` would always wrongly deserialize
@@ -263,6 +260,7 @@ pub mod reply {
         // (ie. smaller variant first, bigger next).
         FullWithReceipts(Vec<TransactionAndReceipt>),
         Full(Vec<Transaction>),
+        HashesOnly(Vec<StarknetTransactionHash>),
     }
 
     #[cfg(test)]
@@ -293,7 +291,7 @@ pub mod reply {
                             "txn_hash":"0x01",
                             "max_fee":"0x0fee",
                             "version":"0x0",
-                            "signature":["0xa","0xb"],
+                            "signature":["1234","12345"],
                             "nonce":"0x0",
                             "contract_address":"0x02",
                             "entry_point_selector":"0x0",
@@ -315,13 +313,13 @@ pub mod reply {
                             "txn_hash":"0x01",
                             "max_fee":"0x0fee",
                             "version":"0x0",
-                            "signature":["0xa","0xb"],
+                            "signature":["1234","12345"],
                             "nonce":"0x0",
                             "contract_address":"0x02",
                             "entry_point_selector":"0x0",
                             "calldata":["0x0"],
                             "actual_fee":"0xafee",
-                            "status":"L2_ACCEPTED"
+                            "status":"ACCEPTED_ON_L2"
                         }]"#
                     )
                     .unwrap(),
@@ -330,18 +328,6 @@ pub mod reply {
                         assert_eq!(t[0].receipt.hash(), StarknetTransactionHash(StarkHash::from_hex_str("0x1").unwrap()));
                     }
                 );
-            }
-
-            #[test]
-            fn unknown_fields_are_denied() {
-                serde_json::from_str::<Transactions>(
-                    r#"[{"txn_hash":"0x01","contract_address":"0x02","denied":0}]"#,
-                )
-                .unwrap_err();
-                serde_json::from_str::<Transactions>(
-                    r#"[{"txn_hash":"0x01","contract_address":"0x02","status":"RECEIVED","status_data":"","messages_sent":[],"events":[],"denied":0}]"#,
-                )
-                .unwrap_err();
             }
         }
     }
@@ -797,19 +783,6 @@ pub mod reply {
         pub common: CommonTransactionReceiptProperties,
     }
 
-    // pub struct TransactionReceipt {
-    //     pub txn_hash: StarknetTransactionHash,
-    //     #[serde_as(as = "Option<FeeAsHexStr>")]
-    //     #[serde(default)]
-    //     pub actual_fee: Option<Fee>,
-    //     pub status: TransactionStatus,
-    //     pub status_data: String,
-    //     pub messages_sent: Vec<transaction_receipt::MessageToL1>,
-    //     #[serde(default)]
-    //     pub l1_origin_message: Option<transaction_receipt::MessageToL2>,
-    //     pub events: Vec<transaction_receipt::Event>,
-    // }
-
     impl TransactionReceipt {
         pub fn with_status(
             receipt: sequencer::reply::transaction::Receipt,
@@ -827,7 +800,7 @@ pub mod reply {
                                 .unwrap_or_else(|| Fee(Default::default())),
                             status: status.into(),
                             // TODO: at the moment not available in sequencer replies
-                            status_data: Default::default(),
+                            status_data: None,
                         },
                     })
                 }
@@ -840,7 +813,7 @@ pub mod reply {
                                 .unwrap_or_else(|| Fee(Default::default())),
                             status: status.into(),
                             // TODO: at the moment not available in sequencer replies
-                            status_data: Default::default(),
+                            status_data: None,
                         },
                         messages_sent: receipt
                             .l2_to_l1_messages
