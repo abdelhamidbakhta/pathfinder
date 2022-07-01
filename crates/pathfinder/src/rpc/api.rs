@@ -184,18 +184,33 @@ impl RpcApi {
                             let t: Transaction = t.into();
                             let r = TransactionReceipt::with_status(r, block_status);
 
-                            reply::TransactionAndReceipt {
-                                txn_hash: t.txn_hash,
-                                contract_address: t.contract_address,
-                                entry_point_selector: t.entry_point_selector,
-                                calldata: t.calldata,
-                                max_fee: t.max_fee,
-                                actual_fee: r.actual_fee,
-                                status: r.status,
-                                status_data: r.status_data,
-                                messages_sent: r.messages_sent,
-                                l1_origin_message: r.l1_origin_message,
-                                events: r.events,
+                            match t {
+                                Transaction::Declare(declare) => reply::TransactionAndReceipt {
+                                    txn_hash: declare.txn_hash,
+                                    contract_address: None,
+                                    entry_point_selector: None,
+                                    calldata: None,
+                                    max_fee: Some(declare.max_fee),
+                                    actual_fee: r.actual_fee,
+                                    status: r.status,
+                                    status_data: r.status_data,
+                                    messages_sent: r.messages_sent,
+                                    l1_origin_message: r.l1_origin_message,
+                                    events: r.events,
+                                },
+                                Transaction::Invoke(invoke) => reply::TransactionAndReceipt {
+                                    txn_hash: invoke.txn_hash,
+                                    contract_address: Some(invoke.contract_address),
+                                    entry_point_selector: Some(invoke.entry_point_selector),
+                                    calldata: Some(invoke.calldata),
+                                    max_fee: Some(invoke.max_fee),
+                                    actual_fee: r.actual_fee,
+                                    status: r.status,
+                                    status_data: r.status_data,
+                                    messages_sent: r.messages_sent,
+                                    l1_origin_message: r.l1_origin_message,
+                                    events: r.events,
+                                },
                             }
                         })
                         .collect(),
